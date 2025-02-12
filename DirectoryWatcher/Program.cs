@@ -10,6 +10,7 @@ if (!Directory.Exists(sourcePath))
 if (!Directory.Exists(extensionPath))
     throw new DirectoryNotFoundException("Extension directory does not exist");
 var extPrefixLength = extensionPath.Length;
+var sourcePrefixLength = sourcePath.Length;
 
 switch (command)
 {
@@ -31,22 +32,56 @@ switch (command)
         break;
     case "sync":
         Console.WriteLine($"Start sync from {extensionPath} to {sourcePath}");
-        InitialCopy();
+        SyncDirectories();
+        break;
+    case "restore":
+        Console.WriteLine($"Start restore {sourcePath}");
+        RestoreSource();
         break;
 }
 
-void InitialCopy()
+void SyncDirectories()
 {
     var extensionFiles = Directory.GetFiles(extensionPath, "*.*", SearchOption.AllDirectories);
     var extensionChunks = extensionFiles.Chunk(1000);
+    List<Task> tasks = new List<Task>();
     foreach (var chunk in extensionChunks)
-        Task.Run(() =>
+        tasks.Add(Task.Run(() =>
         {
             controlCopySemaphore.Wait();
             foreach (var path in chunk)
                 CreateSymLinkFromExtension(path);
+
             controlCopySemaphore.Release();
-        });
+        }));
+
+    Task.WaitAll(tasks.ToArray());
+}
+
+void RestoreSource()
+{
+    var replacedFiles = Directory.GetFiles(sourcePath, "*.replaced", SearchOption.AllDirectories);
+    var replacedChunks = replacedFiles.Chunk(1000);
+    List<Task> tasks = new List<Task>();
+    foreach (var chunk in replacedChunks)
+        tasks.Add(Task.Run(() =>
+        {
+            controlCopySemaphore.Wait();
+            foreach (var path in chunk)
+            {
+                var relativePath = path.Substring(sourcePrefixLength);
+                var fileInfo = new FileInfo(path);
+                var extensionFilePath = extensionPath + relativePath.Substring(0, relativePath.Length - 9);
+                if (!File.Exists(extensionFilePath))
+                {
+                    fileInfo.MoveTo(path.Substring(0, path.Length - 9));
+                    Console.WriteLine($"Symlink {relativePath} restored");
+                }
+            }
+
+            controlCopySemaphore.Release();
+        }));
+    Task.WaitAll(tasks.ToArray());
 }
 
 
